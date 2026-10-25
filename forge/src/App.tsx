@@ -675,7 +675,7 @@ function App() {
           </span>
         </a>
         <div className="header-center">
-          <p className="forge-tagline">Enter focus, build momentum.</p>
+          <p className="forge-tagline">Forge — Enter Focus, Build Momentum.</p>
         </div>
         <div className="header-right">
           <div className="header-actions">
