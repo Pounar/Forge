@@ -120,6 +120,18 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   letter-spacing: .25px;
   text-transform: uppercase;
 }
+@media (min-width: 1081px) {
+  .clock-row {
+    position: fixed;
+    z-index: 2;
+    top: 74px;
+    left: 0;
+    width: 100%;
+    max-width: none;
+    margin-bottom: 0;
+    padding-inline: clamp(22px, 4.4vw, 72px);
+  }
+}
 .header-right { display: flex; width: max-content; flex-direction: column; align-items: stretch; gap: 0; justify-self: end; }
 .header-actions { display: flex; align-items: center; gap: 0; }
 .header-action {
@@ -525,6 +537,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 }
 @media (min-width: 1081px) and (max-height: 820px) {
   .forge-header { min-height: 62px; }
+  .clock-row { top: 62px; }
   .timer-stage { padding-top: 14px; padding-bottom: 12px; }
   .timer-orbit { width: clamp(220px, 34vh, 280px); }
   .timer-center { margin-top: 4px; margin-bottom: 8px; }
