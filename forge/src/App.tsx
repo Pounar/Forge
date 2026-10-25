@@ -49,6 +49,16 @@ const SETTINGS_KEY: Record<Mode, "focusMinutes" | "shortMinutes" | "longMinutes"
 };
 const LIMITS: Record<Mode, number> = { focus: 120, short: 60, long: 90 };
 const PRESETS = [15, 25, 45, 60];
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  weekday: "short",
+  month: "short",
+  day: "numeric",
+});
+const TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
 
 function getBrowserStorageKey(): string {
   let browserId = localStorage.getItem(BROWSER_ID_KEY);
@@ -664,7 +674,9 @@ function App() {
             <span className="forge-brand-subtitle">your focus timer</span>
           </span>
         </a>
-        <p className="forge-tagline">Enter focus, build momentum.</p>
+        <div className="header-center">
+          <p className="forge-tagline">Enter focus, build momentum.</p>
+        </div>
         <div className="header-right">
           <div className="header-actions">
             <button className="header-action progress-action" onClick={() => setPanel("progress")} aria-label="Open focus progress" title="Your progress">
@@ -705,6 +717,10 @@ function App() {
         </aside>
 
         <main className={`timer-stage ${complete ? "is-complete" : ""}`}>
+        <div className="clock-row" aria-label="Current date and local time">
+          <time dateTime={new Date(now).toISOString()}>{DATE_FORMATTER.format(now)}</time>
+          <time dateTime={new Date(now).toISOString()}>{TIME_FORMATTER.format(now)}</time>
+        </div>
         <div className="mode-selector" role="group" aria-label="Choose timer mode">
           {(["focus", "short", "long"] as Mode[]).map((mode) => (
             <button
