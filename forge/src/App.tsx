@@ -199,6 +199,7 @@ function loadData(): AppData {
       saved?.mode === "short" || saved?.mode === "long" ? saved.mode : "focus";
     const timer = freshTimer(mode, settings);
     if (!saved || typeof saved !== "object") return { settings, sessions, timer };
+    if (!saved.running && saved.startedAt == null) return { settings, sessions, timer };
     const durationMinutes = clampDuration(
       saved.durationMinutes,
       mode,
@@ -675,7 +676,7 @@ function App() {
           </span>
         </a>
         <div className="header-center">
-          <p className="forge-tagline">Forge — Enter Focus, Build Momentum.</p>
+          <p className="forge-tagline">Enter focus, build momentum.</p>
         </div>
         <div className="header-right">
           <div className="header-actions">
