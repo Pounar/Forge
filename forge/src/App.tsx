@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 type Mode = "focus" | "short" | "long";
+type DurationParts = { hours: string; minutes: string; seconds: string };
 type Settings = {
   focusMinutes: number;
   shortMinutes: number;
@@ -24,8 +25,11 @@ type Timer = {
 };
 type AppData = { settings: Settings; sessions: FocusSession[]; timer: Timer };
 type Panel = "progress" | "settings" | null;
+type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-const STORAGE_KEY = "forge-app-v1";
+const STORAGE_KEY_PREFIX = "forge-app-v1";
+const LEGACY_STORAGE_KEY = STORAGE_KEY_PREFIX;
+const BROWSER_ID_KEY = "forge-browser-id-v1";
 const DEFAULT_SETTINGS: Settings = {
   focusMinutes: 25,
   shortMinutes: 5,
@@ -45,6 +49,85 @@ const SETTINGS_KEY: Record<Mode, "focusMinutes" | "shortMinutes" | "longMinutes"
 };
 const LIMITS: Record<Mode, number> = { focus: 120, short: 60, long: 90 };
 const PRESETS = [15, 25, 45, 60];
+
+function getBrowserStorageKey(): string {
+  let browserId = localStorage.getItem(BROWSER_ID_KEY);
+  if (!browserId) {
+    browserId = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    localStorage.setItem(BROWSER_ID_KEY, browserId);
+  }
+  return `${STORAGE_KEY_PREFIX}:${browserId}`;
+}
+
+function durationDrafts(settings: Settings): Record<Mode, DurationParts> {
+  return {
+    focus: durationParts(settings.focusMinutes * 60),
+    short: durationParts(settings.shortMinutes * 60),
+    long: durationParts(settings.longMinutes * 60),
+  };
+}
+
+function durationParts(totalSeconds: number): DurationParts {
+  const seconds = Math.max(0, Math.round(totalSeconds));
+  return {
+    hours: String(Math.floor(seconds / 3600)).padStart(2, "0"),
+    minutes: String(Math.floor((seconds % 3600) / 60)).padStart(2, "0"),
+    seconds: String(seconds % 60).padStart(2, "0"),
+  };
+}
+
+function partsToSeconds(parts: DurationParts): number | null {
+  const values = [parts.hours, parts.minutes, parts.seconds];
+  if (values.some((value) => value.trim() === "" || !/^\d+$/.test(value))) return null;
+  const [hours, minutes, seconds] = values.map(Number);
+  if (minutes > 59 || seconds > 59) return null;
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+function DurationInputs({
+  value,
+  onChange,
+  onCommit,
+  prefix,
+}: {
+  value: DurationParts;
+  onChange: (part: keyof DurationParts, value: string) => void;
+  onCommit: () => void;
+  prefix: string;
+}) {
+  return (
+    <div className="duration-inputs" aria-label={`${prefix} custom duration`}>
+      {([
+        ["hours", "hr", 999],
+        ["minutes", "min", 59],
+        ["seconds", "sec", 59],
+      ] as const).map(([part, label, max]) => (
+        <label className="duration-input" key={part}>
+          <input
+            aria-label={`${prefix} duration ${label}`}
+            type="number"
+            min={0}
+            max={max}
+            step={1}
+            inputMode="numeric"
+            value={value[part]}
+            onChange={(event) => onChange(part, event.target.value)}
+            onBlur={onCommit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                onCommit();
+                event.currentTarget.blur();
+              }
+            }}
+          />
+          <span>{label}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
 
 const freshTimer = (mode: Mode, settings: Settings): Timer => {
   const durationMinutes = settings[SETTINGS_KEY[mode]];
@@ -67,12 +150,13 @@ const emptyData = (): AppData => ({
 function clampDuration(value: unknown, mode: Mode, fallback: number): number {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
-  return Math.min(LIMITS[mode], Math.max(1, Math.round(number)));
+  const seconds = Math.min(LIMITS[mode] * 60, Math.max(1, Math.round(number * 60)));
+  return seconds / 60;
 }
 
 function loadData(): AppData {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(getBrowserStorageKey()) ?? localStorage.getItem(LEGACY_STORAGE_KEY);
     if (!raw) return emptyData();
     const value: unknown = JSON.parse(raw);
     if (!value || typeof value !== "object") return emptyData();
@@ -196,9 +280,15 @@ function completeExpiredTimer(data: AppData, completedAt: number): AppData {
 }
 
 function formatDuration(minutes: number): string {
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  const remainder = minutes % 60;
+  const totalSeconds = Math.max(0, Math.round(minutes * 60));
+  if (totalSeconds < 60) return `${totalSeconds} sec`;
+  if (totalSeconds < 3600) {
+    const wholeMinutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return seconds ? `${wholeMinutes}m ${seconds}s` : `${wholeMinutes} min`;
+  }
+  const hours = Math.floor(totalSeconds / 3600);
+  const remainder = Math.floor((totalSeconds % 3600) / 60);
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
@@ -252,7 +342,7 @@ function Icon({ name, size = 18 }: { name: "spark" | "settings" | "chart" | "clo
   };
   const paths: Record<typeof name, React.ReactNode> = {
     spark: <><path d="m12 3 1.3 5.7L19 10l-5.7 1.3L12 17l-1.3-5.7L5 10l5.7-1.3z" /><path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7z" /></>,
-    settings: <><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.1.9-1.1 1.9-1.4-.5a7.4 7.4 0 0 1-1.7 1l-.2 1.5h-2.2l-.3-1.5a7.4 7.4 0 0 1-1.8-1l-1.3.5-1.1-1.9 1.1-.9a7 7 0 0 1 0-2l-1.1-.9 1.1-1.9 1.4.5a7.4 7.4 0 0 1 1.7-1l.2-1.5h2.2l.3 1.5a7.4 7.4 0 0 1 1.8 1l1.3-.5 1.1 1.9-1.1.9a7 7 0 0 1 0 2Z" /></>,
+    settings: <><path d="M9.8 3.5h4.4l.6 2a7.4 7.4 0 0 1 1.5.9l2-.6 2.2 3.8-1.5 1.5a7.2 7.2 0 0 1 0 1.8l1.5 1.5-2.2 3.8-2-.6a7.4 7.4 0 0 1-1.5.9l-.6 2H9.8l-.6-2a7.4 7.4 0 0 1-1.5-.9l-2 .6-2.2-3.8L5 12a7.2 7.2 0 0 1 0-1.8L3.5 8.7l2.2-3.8 2 .6a7.4 7.4 0 0 1 1.5-.9z" /><circle cx="12" cy="12" r="2.4" /></>,
     chart: <><path d="M4 19.5h16M6.5 16v-5M12 16V5M17.5 16V9" /></>,
     close: <><path d="m6 6 12 12M18 6 6 18" /></>,
     minus: <path d="M5 12h14" />,
@@ -269,13 +359,9 @@ function App() {
   const [data, setData] = useState<AppData>(loadData);
   const [now, setNow] = useState(Date.now());
   const [panel, setPanel] = useState<Panel>(null);
-  const [customDuration, setCustomDuration] = useState(String(data.settings.focusMinutes));
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
+  const [durationDraftsState, setDurationDrafts] = useState(() => durationDrafts(data.settings));
   const [durationError, setDurationError] = useState("");
-  const [settingDurationDrafts, setSettingDurationDrafts] = useState<Record<Mode, string>>({
-    focus: String(data.settings.focusMinutes),
-    short: String(data.settings.shortMinutes),
-    long: String(data.settings.longMinutes),
-  });
   const [settingDurationError, setSettingDurationError] = useState("");
   const [notificationMessage, setNotificationMessage] = useState("");
   const [soundMessage, setSoundMessage] = useState("");
@@ -294,11 +380,19 @@ function App() {
   }, []);
 
   useEffect(() => {
+    let statusTimeout: number | undefined;
+    setSaveStatus("saving");
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(getBrowserStorageKey(), JSON.stringify(data));
+      setSaveStatus("saved");
+      statusTimeout = window.setTimeout(() => setSaveStatus("idle"), 1800);
     } catch (error) {
       console.error("Forge could not save focus data in this browser.", error);
+      setSaveStatus("error");
     }
+    return () => {
+      if (statusTimeout !== undefined) window.clearTimeout(statusTimeout);
+    };
   }, [data]);
 
   useEffect(() => {
@@ -331,16 +425,10 @@ function App() {
     }
     if (data.settings.completionNotifications && "Notification" in window && Notification.permission === "granted") {
       new Notification(timer.mode === "focus" ? "Session complete" : "Break complete", {
-        body: timer.mode === "focus" ? `${timer.durationMinutes} minutes of focus. Nicely done.` : "Ready when you are.",
+        body: timer.mode === "focus" ? `${formatDuration(timer.durationMinutes)} of focus. Nicely done.` : "Ready when you are.",
       });
     }
   }, [data.settings.completionNotifications, data.settings.completionSound, remainingMs, timer]);
-
-  useEffect(() => {
-    if (timer.mode === "focus" && timer.startedAt === null) {
-      setCustomDuration(String(data.settings.focusMinutes));
-    }
-  }, [data.settings.focusMinutes, timer.mode, timer.startedAt]);
 
   useEffect(() => {
     if (!panel) return;
@@ -353,14 +441,10 @@ function App() {
 
   useEffect(() => {
     if (panel !== "settings") return;
-    setSettingDurationDrafts({
-      focus: String(data.settings.focusMinutes),
-      short: String(data.settings.shortMinutes),
-      long: String(data.settings.longMinutes),
-    });
+    setDurationDrafts(durationDrafts(data.settings));
     setSettingDurationError("");
     setNotificationMessage("");
-  }, [data.settings.focusMinutes, data.settings.longMinutes, data.settings.shortMinutes, panel]);
+  }, [panel]);
 
   const todayStart = useMemo(() => {
     const date = new Date();
@@ -379,7 +463,8 @@ function App() {
   const timerProgress = timer.durationMinutes > 0
     ? Math.min(1, Math.max(0, 1 - remainingMs / (timer.durationMinutes * 60_000)))
     : 0;
-  const minutes = String(Math.floor(remainingMs / 60_000)).padStart(2, "0");
+  const displayHours = Math.floor(remainingMs / 3_600_000);
+  const displayMinutes = String(Math.floor((remainingMs % 3_600_000) / 60_000)).padStart(2, "0");
   const seconds = String(Math.floor((remainingMs % 60_000) / 1_000)).padStart(2, "0");
   const status = complete
     ? "SESSION COMPLETE"
@@ -486,8 +571,8 @@ function App() {
     });
   };
 
-  const updateDuration = (mode: Mode, rawValue: number) => {
-    const value = clampDuration(rawValue, mode, data.settings[SETTINGS_KEY[mode]]);
+  const updateDuration = (mode: Mode, rawSeconds: number) => {
+    const value = clampDuration(rawSeconds / 60, mode, data.settings[SETTINGS_KEY[mode]]);
     setData((previous) => {
       const settings = { ...previous.settings, [SETTINGS_KEY[mode]]: value };
       const timer =
@@ -498,29 +583,41 @@ function App() {
           : previous.timer;
       return { ...previous, settings, timer };
     });
-    if (mode === "focus") {
-      setCustomDuration(String(value));
-      setDurationError("");
+  };
+
+  const updateDurationDraft = (mode: Mode, part: keyof DurationParts, value: string) => {
+    const nextDraft = { ...durationDraftsState[mode], [part]: value };
+    setDurationDrafts((previous) => ({
+      ...previous,
+      [mode]: nextDraft,
+    }));
+    setDurationError("");
+    setSettingDurationError("");
+    const seconds = partsToSeconds(nextDraft);
+    if (seconds !== null && seconds >= 1 && seconds <= LIMITS[mode] * 60) {
+      updateDuration(mode, seconds);
     }
   };
 
-  const applyCustomDuration = () => {
-    const value = Number(customDuration);
-    if (!Number.isFinite(value) || value < 1 || value > LIMITS.focus) {
-      setDurationError("Choose a duration from 1 to 120 minutes.");
-      return;
-    }
-    updateDuration("focus", value);
-  };
-
-  const saveSettingDuration = (mode: Mode) => {
-    const value = Number(settingDurationDrafts[mode]);
-    if (!Number.isFinite(value) || value < 1 || value > LIMITS[mode]) {
-      setSettingDurationError(`${MODE_NAMES[mode]} duration must be between 1 and ${LIMITS[mode]} minutes.`);
+  const applyCustomDuration = (mode: Mode) => {
+    const value = partsToSeconds(durationDraftsState[mode]);
+    if (value === null || value < 1 || value > LIMITS[mode] * 60) {
+      setDurationError(`Choose a valid ${MODE_NAMES[mode].toLowerCase()} duration from 1 second to ${LIMITS[mode]} minutes.`);
       return;
     }
     updateDuration(mode, value);
-    setSettingDurationDrafts((previous) => ({ ...previous, [mode]: String(clampDuration(value, mode, 1)) }));
+    setDurationDrafts((previous) => ({ ...previous, [mode]: durationParts(value) }));
+    setDurationError("");
+  };
+
+  const saveSettingDuration = (mode: Mode) => {
+    const value = partsToSeconds(durationDraftsState[mode]);
+    if (value === null || value < 1 || value > LIMITS[mode] * 60) {
+      setSettingDurationError(`${MODE_NAMES[mode]} duration must be between 1 second and ${LIMITS[mode]} minutes.`);
+      return;
+    }
+    updateDuration(mode, value);
+    setDurationDrafts((previous) => ({ ...previous, [mode]: durationParts(value) }));
     setSettingDurationError("");
   };
 
@@ -558,24 +655,25 @@ function App() {
         <a className="forge-brand" href="#" onClick={(event) => event.preventDefault()} aria-label="Forge home">
           <span className="forge-mark" aria-hidden="true">
             <svg viewBox="0 0 36 36" fill="none">
-              <path className="forge-mark-shield" d="M18 3.5 30 8v9.2c0 7.2-4.9 12.6-12 15.3C10.9 29.8 6 24.4 6 17.2V8l12-4.5Z" />
-              <path className="forge-mark-letter" d="M23.8 11.2H13v13.6m0-7h8" />
-              <path className="forge-mark-spark" d="m22.8 22.1 1.5 2.8 2.8 1.4-2.8 1.5-1.5 2.8-1.4-2.8-2.8-1.5 2.8-1.4 1.4-2.8Z" />
+              <circle className="forge-mark-ring" cx="18" cy="18" r="11" />
+              <circle className="forge-mark-center" cx="18" cy="18" r="2" />
             </svg>
           </span>
           <span className="forge-brand-copy">
             <span className="forge-brand-name">Forge</span>
-            <span className="forge-watermark">Built by Pounar</span>
+            <span className="forge-brand-subtitle">your focus timer</span>
           </span>
         </a>
-        <p className="forge-tagline">Enter focus. Build momentum.</p>
-        <div className="header-actions">
-          <button className="header-action progress-action" onClick={() => setPanel("progress")} aria-label="Open focus progress" title="Your progress">
-            <Icon name="chart" size={18} /><span>Progress</span>
-          </button>
-          <button className="header-action settings-action" onClick={() => setPanel("settings")} aria-label="Open settings" title="Settings">
-            <Icon name="settings" size={18} />
-          </button>
+        <p className="forge-tagline">Enter focus, build momentum.</p>
+        <div className="header-right">
+          <div className="header-actions">
+            <button className="header-action progress-action" onClick={() => setPanel("progress")} aria-label="Open focus progress" title="Your progress">
+              <Icon name="chart" size={18} /><span>Progress</span>
+            </button>
+            <button className="header-action settings-action" onClick={() => setPanel("settings")} aria-label="Open settings" title="Settings">
+              <Icon name="settings" size={18} />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -620,42 +718,37 @@ function App() {
           ))}
         </div>
 
-        {timer.mode === "focus" && !timer.running && !complete && (
-          <div className="quick-duration" aria-label="Focus duration presets">
-            {PRESETS.map((preset) => (
-              <button
-                key={preset}
-                className={data.settings.focusMinutes === preset ? "chosen" : ""}
-                onClick={() => updateDuration("focus", preset)}
-                aria-pressed={data.settings.focusMinutes === preset}
-              >
-                {preset} min
-              </button>
-            ))}
-            <label className="custom-duration">
-              <input
-                aria-label="Custom focus duration in minutes"
-                type="number"
-                min={1}
-                max={LIMITS.focus}
-                value={customDuration}
-                onChange={(event) => {
-                  setCustomDuration(event.target.value);
-                  setDurationError("");
-                }}
-                onBlur={applyCustomDuration}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    applyCustomDuration();
-                    event.currentTarget.blur();
-                  }
-                }}
-              />
-              <span>custom</span>
-            </label>
+        {!timer.running && !complete && timer.startedAt === null && (
+          <div className="duration-controls">
+            {timer.mode === "focus" && (
+              <div className="quick-duration" aria-label="Focus duration presets">
+                {PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    className={data.settings.focusMinutes === preset ? "chosen" : ""}
+                    onClick={() => {
+                      updateDuration("focus", preset * 60);
+                      setDurationDrafts((previous) => ({
+                        ...previous,
+                        focus: durationParts(preset * 60),
+                      }));
+                    }}
+                    aria-pressed={data.settings.focusMinutes === preset}
+                  >
+                    {preset} min
+                  </button>
+                ))}
+              </div>
+            )}
+            <DurationInputs
+              value={durationDraftsState[timer.mode]}
+              onChange={(part, value) => updateDurationDraft(timer.mode, part, value)}
+              onCommit={() => applyCustomDuration(timer.mode)}
+              prefix={MODE_NAMES[timer.mode]}
+            />
+            {durationError && <p className="duration-error" role="alert">{durationError}</p>}
           </div>
         )}
-        {durationError && timer.mode === "focus" && <p className="duration-error" role="alert">{durationError}</p>}
 
         <section className="timer-center" aria-label={`${MODE_NAMES[timer.mode]} timer`}>
           <div className={`timer-orbit ${timer.running ? "is-running" : ""} ${complete ? "is-complete" : ""}`}>
@@ -671,7 +764,10 @@ function App() {
             </svg>
             <div className="timer-display">
               <span className="timer-mode-name">{MODE_NAMES[timer.mode].toUpperCase()}</span>
-              <span className="timer-digits" aria-live="off"><span>{minutes}</span><i>:</i><span>{seconds}</span></span>
+              <span className={`timer-digits ${displayHours > 0 ? "has-hours" : ""}`} aria-live="off">
+                {displayHours > 0 && <><span>{String(displayHours).padStart(2, "0")}</span><i>:</i></>}
+                <span>{displayMinutes}</span><i>:</i><span>{seconds}</span>
+              </span>
               <span className={`timer-status ${timer.running ? "status-running" : complete ? "status-complete" : status === "PAUSED" ? "status-paused" : ""}`}>
                 <span className="state-indicator" />{status}
               </span>
@@ -738,6 +834,12 @@ function App() {
       <footer className="forge-footer">
         <span className="footer-status"><span className={timer.running ? "status-dot active" : "status-dot"} />{timer.running ? "Focus session in progress" : "Your focus stays on this device"}</span>
         <span className="footer-divider" />
+        {saveStatus !== "idle" && (
+          <span className={`save-indicator ${saveStatus}`} role="status" aria-live="polite">
+            {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "Saved locally" : "Couldn’t save locally"}
+          </span>
+        )}
+        {saveStatus !== "idle" && <span className="footer-divider save-divider" />}
         <button onClick={() => setPanel("progress")}>Today <span>{todaySessions.length} {todaySessions.length === 1 ? "session" : "sessions"}</span><span className="footer-arrow">↗</span></button>
       </footer>
 
@@ -780,24 +882,15 @@ function App() {
                 <p className="settings-intro">A few small choices to make your focus rhythm feel right.</p>
                 <div className="settings-fields">
                   {(["focus", "short", "long"] as Mode[]).map((mode) => (
-                    <label className="setting-duration" key={mode}>
-                      <span><strong>{mode === "focus" ? "Focus duration" : MODE_NAMES[mode]}</strong><small>1–{LIMITS[mode]} minutes</small></span>
-                      <span className="setting-number"><input
-                        type="number"
-                        min={1}
-                        max={LIMITS[mode]}
-                        aria-label={`${MODE_NAMES[mode]} duration in minutes`}
-                        value={settingDurationDrafts[mode]}
-                        onChange={(event) => setSettingDurationDrafts((previous) => ({ ...previous, [mode]: event.target.value }))}
-                        onBlur={() => saveSettingDuration(mode)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            saveSettingDuration(mode);
-                            event.currentTarget.blur();
-                          }
-                        }}
-                      /><small>min</small></span>
-                    </label>
+                    <div className="setting-duration" key={mode}>
+                      <span><strong>{mode === "focus" ? "Focus duration" : MODE_NAMES[mode]}</strong><small>1 second–{LIMITS[mode]} minutes</small></span>
+                      <DurationInputs
+                        value={durationDraftsState[mode]}
+                        onChange={(part, value) => updateDurationDraft(mode, part, value)}
+                        onCommit={() => saveSettingDuration(mode)}
+                        prefix={MODE_NAMES[mode]}
+                      />
+                    </div>
                   ))}
                 </div>
                 {settingDurationError && <p className="setting-error" role="alert">{settingDurationError}</p>}
@@ -819,6 +912,7 @@ function App() {
                 </label>
                 {notificationMessage && <p className="setting-error" role="status">{notificationMessage}</p>}
                 <p className="settings-privacy"><Icon name="spark" size={15} /> Your timer and session history stay in this browser.</p>
+                <span className="forge-watermark settings-watermark">Built by <span className="watermark-name">Pounar</span></span>
               </>
             )}
           </section>
