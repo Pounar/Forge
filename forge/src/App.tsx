@@ -172,11 +172,10 @@ function loadData(): AppData {
     if (!value || typeof value !== "object") return emptyData();
     const stored = value as Partial<AppData> & {
       settings?: Partial<Settings>;
-      timer?: Partial<Timer>;
     };
     const oldSettings: Partial<Settings> = stored.settings ?? {};
     const settings: Settings = {
-      focusMinutes: clampDuration(oldSettings.focusMinutes, "focus", DEFAULT_SETTINGS.focusMinutes),
+      focusMinutes: DEFAULT_SETTINGS.focusMinutes,
       shortMinutes: clampDuration(oldSettings.shortMinutes, "short", DEFAULT_SETTINGS.shortMinutes),
       longMinutes: clampDuration(oldSettings.longMinutes, "long", DEFAULT_SETTINGS.longMinutes),
       completionSound: oldSettings.completionSound !== false,
@@ -194,46 +193,7 @@ function loadData(): AppData {
           ),
         )
       : [];
-    const saved = stored.timer;
-    const mode: Mode =
-      saved?.mode === "short" || saved?.mode === "long" ? saved.mode : "focus";
-    const timer = freshTimer(mode, settings);
-    if (!saved || typeof saved !== "object") return { settings, sessions, timer };
-    if (!saved.running && saved.startedAt == null) return { settings, sessions, timer };
-    const durationMinutes = clampDuration(
-      saved.durationMinutes,
-      mode,
-      settings[SETTINGS_KEY[mode]],
-    );
-    if (saved.running && Number.isFinite(saved.endAt)) {
-      return {
-        settings,
-        sessions,
-        timer: {
-          mode,
-          running: true,
-          endAt: saved.endAt!,
-          remainingMs: Math.max(0, saved.endAt! - Date.now()),
-          startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt! : null,
-          durationMinutes,
-        },
-      };
-    }
-    if (Number.isFinite(saved.remainingMs)) {
-      return {
-        settings,
-        sessions,
-        timer: {
-          mode,
-          running: false,
-          endAt: null,
-          remainingMs: Math.max(0, saved.remainingMs!),
-          startedAt: Number.isFinite(saved.startedAt) ? saved.startedAt! : null,
-          durationMinutes,
-        },
-      };
-    }
-    return { settings, sessions, timer };
+    return { settings, sessions, timer: freshTimer("focus", settings) };
   } catch (error) {
     console.warn("Forge could not read its saved focus data.", error);
     return emptyData();
